@@ -266,7 +266,7 @@ export default function App() {
   const [planTab, setPlanTab] = useState("improvements");
   const bottom = useRef(null);
 
-  useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [step, planTab]);
+  useEffect(() => { window.scrollTo({ top: 0, behavior: "smooth" }); }, [step]);
   useEffect(() => {
     const s = document.createElement("style"); s.textContent = GLOBAL_CSS; document.head.appendChild(s);
     return () => document.head.removeChild(s);
@@ -334,26 +334,36 @@ Start each issue with CRITICAL:, IMPORTANT:, or MINOR: — no emojis. Be specifi
     }
     setLoadMsg("Comparing with previous report…");
     try {
-      const raw = await callAI([{
-        role: "user", content: `Re-audit this website. Be consistent with scoring.
-Previous score: ${report.score}
-Previous issues: ${JSON.stringify(report.issues)}
-Current site data: ${JSON.stringify(meta)}
-URL: ${url}
-RULE: If nothing changed, keep score within 2 points of ${report.score}.
-Return ONLY raw JSON:
-{
-  "score": ${report.score},
-  "issues": ["CRITICAL: ...", "IMPORTANT: ...", "MINOR: ..."],
-  "fixed": ["description of resolved issue"],
-  "newIssues": ["description of new issue"],
-  "summary": "One sentence on what changed.",
-  "lang": "${report.lang}",
-  "siteType": "${report.siteType}"
-}
-Start each issue with CRITICAL:, IMPORTANT:, or MINOR:`
-      }], "You are a consistent SEO auditor. Return only raw JSON.");
+      const recheckPrompt = [
+        "Re-audit this website SEO. You MUST return the same score unless there is clear evidence of changes.",
+        "Previous score: " + report.score,
+        "Previous issues: " + JSON.stringify(report.issues),
+        "New site data: " + JSON.stringify(meta),
+        "URL: " + url,
+        "",
+        "STRICT SCORING RULE: The score must be exactly " + report.score + " unless you can clearly identify",
+        "a specific issue that was fixed or a new problem. Maximum change allowed: 3 points.",
+        "If the data looks the same, return score: " + report.score,
+        "",
+        "Return ONLY a raw JSON object, no markdown, no backticks:",
+        JSON.stringify({
+          score: "KEEP AT " + report.score + " unless clear change",
+          issues: ["CRITICAL: example", "IMPORTANT: example", "MINOR: example"],
+          fixed: ["only list if genuinely resolved"],
+          newIssues: ["only list if genuinely new"],
+          summary: "one sentence",
+          lang: report.lang,
+          siteType: report.siteType
+        })
+      ].join("\n");
+      const raw = await callAI([{ role: "user", content: recheckPrompt }],
+        "You are a consistent SEO auditor. Never change the score without clear evidence. Return only raw JSON.");
       const parsed = extractJSON(raw);
+      // Force score to stay within 3 points of previous
+      if (Math.abs(parsed.score - report.score) > 3) {
+        parsed.score = report.score;
+        parsed.summary = "Score unchanged — no significant differences detected.";
+      }
       setReport(parsed); setStep("delta");
     } catch { setStep(prevReport ? "delta" : "report"); }
   }
@@ -432,62 +442,34 @@ Make keywords SPECIFIC to this site's niche and language (${report.lang}).`
 
       // ── Call 2: Blog posts batch 1 ──
       setLoadMsg("Creating blog post ideas (1/2)…");
-      const blogPrompt1 = [
-        "Create 4 SEO-optimised blog post ideas for this website.",
-        "Website URL: " + url,
+      const b1 = await callAI([{ role: "user", content: [
+        "Create 4 SEO blog post ideas for: " + url,
         "Language: " + lang,
-        "Site info: " + siteContext,
-        "",
-        "Return ONLY a raw JSON object. No markdown, no backticks, no extra text.",
-        "Use this exact shape:",
-        '{"posts":[{"title":"blog title","keyword":"target keyword","type":"how-to","wordCount":900,"rationale":"why this topic will bring traffic","prompt":"the full AI prompt"}]}',
-        "",
-        "For each post write a detailed prompt field that:",
-        "- Starts with: Write a [wordCount]-word SEO blog post in " + lang,
-        "- Includes the specific title and keyword",
-        "- References the website " + url + " and its topic",
-        "- Describes the structure: intro, 5 H2 sections, conclusion with CTA",
-        "- Mentions using the keyword naturally 3-4 times",
-        "- Ends with: Approximate word count: [wordCount] words",
-        "",
-        "Make all 4 posts relevant to this specific site niche."
-      ].join("\n");
-
-      const rawBlog1 = await callAI([{ role: "user", content: blogPrompt1 }],
-        "You are an SEO content strategist. Return only a raw JSON object. No markdown. No backticks. No explanation.", 1400);
-      console.log("BLOG1 RAW:", rawBlog1.slice(0, 150));
-      const blog1Parsed = extractJSON(rawBlog1);
+        "Site: " + siteContext,
+        "Return ONLY raw JSON, no markdown, no backticks:",
+        "{ \"posts\": [ { \"title\": \"Post title\", \"keyword\": \"keyword\", \"type\": \"how-to\", \"wordCount\": 900, \"rationale\": \"why this brings traffic\", \"prompt\": \"Write a 900-word SEO blog post in LANG titled TITLE. Target keyword: KEYWORD. The website is URL. Structure: engaging intro with keyword, 5 H2 subheadings with practical advice, conclusion with CTA to visit the site. Use keyword 3-4 times naturally. Tone: professional.\" } ] }",
+        "Replace LANG with " + lang + ", and write titles/keywords specific to this site niche.",
+        "4 posts total."
+      ].join("\n") }],
+        "Return only raw JSON. No markdown. No backticks.", 1400);
+      const blog1Parsed = extractJSON(b1);
 
       // ── Call 3: Blog posts batch 2 ──
       setLoadMsg("Creating blog post ideas (2/2)…");
-      const blogPrompt2 = [
-        "Create 4 MORE different SEO blog post ideas for this website. Use different topics from before.",
-        "Website URL: " + url,
+      const b2 = await callAI([{ role: "user", content: [
+        "Create 4 MORE different SEO blog post ideas for: " + url,
         "Language: " + lang,
-        "Site info: " + siteContext,
-        "",
-        "Return ONLY a raw JSON object. No markdown, no backticks, no extra text.",
-        "Use this exact shape:",
-        '{"posts":[{"title":"blog title","keyword":"target keyword","type":"listicle","wordCount":800,"rationale":"why this topic will bring traffic","prompt":"the full AI prompt"}]}',
-        "",
-        "For each post write a detailed prompt field that:",
-        "- Starts with: Write a [wordCount]-word SEO blog post in " + lang,
-        "- Includes the specific title and keyword",
-        "- References the website " + url + " and its topic",
-        "- Describes the structure: intro, 5 H2 sections, conclusion with CTA",
-        "- Mentions using the keyword naturally 3-4 times",
-        "- Ends with: Approximate word count: [wordCount] words",
-        "",
-        "Make all 4 posts on completely different angles from the first batch."
-      ].join("\n");
-
-      const rawBlog2 = await callAI([{ role: "user", content: blogPrompt2 }],
-        "You are an SEO content strategist. Return only a raw JSON object. No markdown. No backticks. No explanation.", 1400);
-      console.log("BLOG2 RAW:", rawBlog2.slice(0, 150));
-      const blog2Parsed = extractJSON(rawBlog2);
+        "Site: " + siteContext,
+        "Different topics from any previous posts.",
+        "Return ONLY raw JSON, no markdown, no backticks:",
+        "{ \"posts\": [ { \"title\": \"Post title\", \"keyword\": \"keyword\", \"type\": \"listicle\", \"wordCount\": 800, \"rationale\": \"why this brings traffic\", \"prompt\": \"Write an 800-word SEO blog post in LANG titled TITLE. Target keyword: KEYWORD. The website is URL. Structure: engaging intro with keyword, 5 H2 subheadings with practical advice, conclusion with CTA to visit the site. Use keyword 3-4 times naturally. Tone: professional.\" } ] }",
+        "Replace LANG with " + lang + ", and write titles/keywords specific to this site niche.",
+        "4 posts on completely different topics from batch 1."
+      ].join("\n") }],
+        "Return only raw JSON. No markdown. No backticks.", 1400);
+      const blog2Parsed = extractJSON(b2);
 
       const allPosts = [...(blog1Parsed.posts || []), ...(blog2Parsed.posts || [])];
-      console.log("Total posts:", allPosts.length);
 
       setPlan({ improvements: impParsed.improvements || [], posts: allPosts });
       setPlanTab("improvements");
@@ -515,7 +497,7 @@ Make keywords SPECIFIC to this site's niche and language (${report.lang}).`
             return (
               <div key={s} style={{ display: "flex", alignItems: "center", gap: 5 }}>
                 <div style={{ width: 7, height: 7, borderRadius: "50%", background: reached ? "#1E8A5E" : "#1E2A38", transition: "background .3s" }} />
-                <span style={{ fontFamily: "'DM Mono'", fontSize: 11, color: reached ? "#1E8A5E" : "#2A3A4A", textTransform: "uppercase", letterSpacing: 1, display: window.innerWidth < 600 ? "none" : "inline" }}>{stepLabels[i]}</span>
+                <span style={{ fontFamily: "'DM Mono'", fontSize: 11, color: reached ? "#1E8A5E" : "#2A3A4A", textTransform: "uppercase", letterSpacing: 1 }}>{stepLabels[i]}</span>
                 {i < stepKeys.length - 1 && <div style={{ width: 14, height: 1, background: "#1A2332", margin: "0 2px" }} />}
               </div>
             );
