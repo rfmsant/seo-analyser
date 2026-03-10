@@ -486,7 +486,7 @@ Return ONLY raw JSON, no markdown:
                 Your website,<br /><span style={{ color: "#1E8A5E" }}>ranked higher.</span>
               </h1>
               <p style={{ color: "#4A5A6A", fontSize: 17, lineHeight: 1.8, maxWidth: 500 }}>
-                Get a full SEO audit, keyword strategy, and a personalised content plan — in seconds, for free.
+                Get a full SEO audit, keyword strategy, and a personalised content plan — in seconds, for freee.
               </p>
             </div>
             <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
