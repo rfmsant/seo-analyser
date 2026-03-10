@@ -16,6 +16,8 @@ const GLOBAL_CSS = `
   .fade-up { animation: fadeUp 0.45s ease forwards; }
   .copy-btn:hover { background: #1E8A5E !important; color: #fff !important; border-color: #1E8A5E !important; }
   .imp-card:hover { border-color: #2A3A4A !important; }
+  .logo-btn { cursor: pointer; display: flex; align-items: center; gap: 10px; background: none; border: none; padding: 0; }
+  .logo-btn:hover span { color: #1E8A5E !important; }
 `;
 
 async function callAI(messages, system, maxTokens = 1500) {
@@ -39,11 +41,20 @@ function extractJSON(raw) {
 }
 
 async function fetchSite(url) {
-  const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`);
-  if (!res.ok) throw new Error("blocked");
-  const text = await res.text();
-  if (!text || text.length < 100) throw new Error("empty");
-  return text;
+  const proxies = [
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    `https://corsproxy.io/?${encodeURIComponent(url)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+  ];
+  for (const proxy of proxies) {
+    try {
+      const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) continue;
+      const text = await res.text();
+      if (text && text.length > 100) return text;
+    } catch { continue; }
+  }
+  throw new Error("blocked");
 }
 
 function extractMeta(html) {
@@ -70,15 +81,15 @@ function getIssuePriority(issue) {
   if (t.startsWith("IMPORTANT") || t.includes("IMPORTANT:")) return "important";
   return "minor";
 }
-
 function issueColor(issue) {
   const p = getIssuePriority(issue);
   return p === "critical" ? "#C0392B" : p === "important" ? "#D4A017" : "#1E8A5E";
 }
-
 function cleanIssueText(issue) {
   return issue.replace(/^(CRITICAL|IMPORTANT|MINOR):\s*/i, "");
 }
+
+// ── UI Components ─────────────────────────────────────────────────────────────
 
 function ScoreRing({ score, prev }) {
   const r = 54, circ = 2 * Math.PI * r;
@@ -130,6 +141,24 @@ function IssueCard({ issue, isNew, isFixed }) {
   );
 }
 
+function KeywordCard({ kw }) {
+  const intentColor = { informational: "#3B82F6", transactional: "#1E8A5E", navigational: "#D4A017", commercial: "#A855F7" };
+  const diffColor = kw.difficulty === "low" ? "#1E8A5E" : kw.difficulty === "medium" ? "#D4A017" : "#C0392B";
+  return (
+    <div style={{ background: "#111820", border: "1px solid #1E2A38", borderRadius: 12, padding: "14px 18px", marginBottom: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontWeight: 700, fontSize: 15, color: "#E8EDF2", flex: 1, minWidth: 140 }}>{kw.keyword}</span>
+        <Tag color={intentColor[kw.intent] || "#3B82F6"}>{kw.intent}</Tag>
+        <Tag color={diffColor}>{kw.difficulty} difficulty</Tag>
+        <Tag color="#4A5A6A">{kw.priority} priority</Tag>
+      </div>
+      {kw.rationale && (
+        <div style={{ fontSize: 13, color: "#4A5A6A", marginTop: 8, lineHeight: 1.6 }}>{kw.rationale}</div>
+      )}
+    </div>
+  );
+}
+
 function ImprovementCard({ item }) {
   const [open, setOpen] = useState(false);
   const priColor = item.priority === "high" ? "#C0392B" : item.priority === "medium" ? "#D4A017" : "#1E8A5E";
@@ -163,9 +192,7 @@ function BlogCard({ post, index }) {
     <div style={{ background: "#111820", border: "1px solid #1E2A38", borderRadius: 12, marginBottom: 12, overflow: "hidden" }}>
       <div style={{ padding: "18px 20px" }}>
         <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 14 }}>
-          <div style={{ width: 38, height: 38, borderRadius: 9, background: "#162030", border: "1px solid #2A3A4A", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Mono'", fontSize: 14, color: "#4A8A6A", flexShrink: 0, fontWeight: 700 }}>
-            #{index + 1}
-          </div>
+          <div style={{ width: 38, height: 38, borderRadius: 9, background: "#162030", border: "1px solid #2A3A4A", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Mono'", fontSize: 14, color: "#4A8A6A", flexShrink: 0, fontWeight: 700 }}>#{index + 1}</div>
           <div style={{ flex: 1 }}>
             <div style={{ fontWeight: 700, fontSize: 16, color: "#E8EDF2", marginBottom: 6 }}>{post.title}</div>
             <div style={{ fontSize: 13, color: "#5A6A7A", marginBottom: 12, lineHeight: 1.65 }}>{post.rationale}</div>
@@ -223,6 +250,7 @@ function Btn({ children, onClick, primary, disabled, small }) {
   );
 }
 
+// ── MAIN APP ──────────────────────────────────────────────────────────────────
 export default function App() {
   const [step, setStep] = useState("input");
   const [url, setUrl] = useState("");
@@ -233,17 +261,21 @@ export default function App() {
   const [siteData, setSiteData] = useState(null);
   const [report, setReport] = useState(null);
   const [prevReport, setPrevReport] = useState(null);
+  const [keywords, setKeywords] = useState(null);
   const [plan, setPlan] = useState(null);
   const [planTab, setPlanTab] = useState("improvements");
   const bottom = useRef(null);
 
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [step, planTab]);
   useEffect(() => {
-    const s = document.createElement("style");
-    s.textContent = GLOBAL_CSS;
-    document.head.appendChild(s);
+    const s = document.createElement("style"); s.textContent = GLOBAL_CSS; document.head.appendChild(s);
     return () => document.head.removeChild(s);
   }, []);
+
+  function reset() {
+    setUrl(""); setStep("input"); setReport(null); setPrevReport(null);
+    setPlan(null); setKeywords(null); setSiteData(null); setManual(false); setManualDesc(""); setError(null);
+  }
 
   async function scan() {
     setError(null); setManual(false); setStep("loading"); setLoadMsg("Fetching your website…");
@@ -277,16 +309,15 @@ Return ONLY raw JSON with no markdown, no backticks:
   "score": 65,
   "issues": [
     "CRITICAL: Page title is missing or too generic",
-    "IMPORTANT: Meta description is too short at only 40 characters",
-    "MINOR: 3 images are missing alt text"
+    "IMPORTANT: Meta description is too short",
+    "MINOR: Images are missing alt text"
   ],
-  "summary": "Two sentence plain English overview of the site SEO health.",
+  "summary": "Two sentence plain English overview of SEO health.",
   "lang": "English",
   "siteType": "business"
 }
-
-Start each issue with CRITICAL:, IMPORTANT:, or MINOR: — do NOT use emojis. Be specific about actual values found.`
-      }], "You are an expert SEO auditor. Return only raw JSON. No markdown, no backticks, no explanation.");
+Start each issue with CRITICAL:, IMPORTANT:, or MINOR: — no emojis. Be specific.`
+      }], "You are an expert SEO auditor. Return only raw JSON. No markdown, no backticks.");
       const parsed = extractJSON(raw);
       setReport(parsed); setPrevReport(null); setStep("report");
     } catch (e) {
@@ -304,21 +335,18 @@ Start each issue with CRITICAL:, IMPORTANT:, or MINOR: — do NOT use emojis. Be
     setLoadMsg("Comparing with previous report…");
     try {
       const raw = await callAI([{
-        role: "user", content: `Re-audit this website. You MUST be consistent with scoring.
+        role: "user", content: `Re-audit this website. Be consistent with scoring.
 Previous score: ${report.score}
 Previous issues: ${JSON.stringify(report.issues)}
 Current site data: ${JSON.stringify(meta)}
 URL: ${url}
-
-STRICT RULE: If the site data looks the same, keep score within 2 points of ${report.score}.
-Only put something in "fixed" if the new site data clearly shows it was resolved.
-
-Return ONLY raw JSON, no markdown:
+RULE: If nothing changed, keep score within 2 points of ${report.score}.
+Return ONLY raw JSON:
 {
   "score": ${report.score},
   "issues": ["CRITICAL: ...", "IMPORTANT: ...", "MINOR: ..."],
-  "fixed": ["short description of resolved issue"],
-  "newIssues": ["short description of new issue"],
+  "fixed": ["description of resolved issue"],
+  "newIssues": ["description of new issue"],
   "summary": "One sentence on what changed.",
   "lang": "${report.lang}",
   "siteType": "${report.siteType}"
@@ -327,117 +355,120 @@ Start each issue with CRITICAL:, IMPORTANT:, or MINOR:`
       }], "You are a consistent SEO auditor. Return only raw JSON.");
       const parsed = extractJSON(raw);
       setReport(parsed); setStep("delta");
-    } catch {
-      setStep(prevReport ? "delta" : "report");
+    } catch { setStep(prevReport ? "delta" : "report"); }
+  }
+
+  async function generateKeywords() {
+    setStep("loading"); setLoadMsg("Analysing keywords…");
+    const siteContext = siteData
+      ? `Title: "${siteData.title}". Desc: "${siteData.desc}". H1: "${siteData.h1s}". Content: "${siteData.bodyText?.slice(0, 500)}"`
+      : `Description: "${manualDesc}"`;
+    try {
+      const raw = await callAI([{
+        role: "user", content: `Generate keyword analysis for this website.
+URL: ${url}
+Language: ${report.lang}
+Site type: ${report.siteType}
+Site info: ${siteContext}
+
+Return ONLY raw JSON, no markdown:
+{
+  "metaTitle": "Suggested optimised title tag (50-60 chars, keyword first)",
+  "metaDesc": "Suggested meta description (140-155 chars, includes main keyword and CTA)",
+  "keywords": [
+    {
+      "keyword": "exact keyword phrase",
+      "intent": "informational",
+      "difficulty": "low",
+      "priority": "high",
+      "rationale": "Why this keyword matters for this specific site"
+    }
+  ]
+}
+Generate 15 keywords. intent: informational/transactional/navigational/commercial. difficulty: low/medium/high. priority: high/medium/low.
+Make keywords SPECIFIC to this site's niche and language (${report.lang}).`
+      }], "Return only raw JSON. No markdown. No backticks.", 1200);
+      const parsed = extractJSON(raw);
+      setKeywords(parsed); setStep("keywords");
+    } catch (e) {
+      console.error("KEYWORDS ERROR:", e.message);
+      setError("ai"); setStep(prevReport ? "delta" : "report");
     }
   }
 
   async function generatePlan() {
     setStep("loading");
     const siteContext = siteData
-      ? `Title: "${siteData.title}". Desc: "${siteData.desc}". H1: "${siteData.h1s}". Content sample: "${siteData.bodyText?.slice(0, 400)}"`
+      ? `Title: "${siteData.title}". Desc: "${siteData.desc}". H1: "${siteData.h1s}". Content: "${siteData.bodyText?.slice(0, 400)}"`
       : `Description: "${manualDesc}"`;
     const issuesSummary = report.issues?.slice(0, 4).join("; ");
-
     try {
-      // Call 1: improvements
       setLoadMsg("Generating improvement tasks…");
       const rawImp = await callAI([{
         role: "user", content: `Create 6 specific SEO improvement tasks for this site.
 URL: ${url}
 Type: ${report.siteType}
 Language: ${report.lang}
-Issues found: ${issuesSummary}
-Site info: ${siteContext}
-
-Return ONLY raw JSON, no markdown, no backticks:
-{"improvements":[
-  {"icon":"🏠","task":"Rewrite the homepage title tag","priority":"high","rationale":"Current title is too generic and won't rank","howTo":"In your CMS go to Settings > SEO. Change the title to something like: [suggest specific title using their actual site topic]. Keep it under 60 characters with the main keyword first."},
-  {"icon":"📝","task":"Add meta descriptions to all pages","priority":"high","rationale":"Missing meta descriptions hurt click-through rates","howTo":"For each page add a 140-155 character description. For the homepage try: [suggest based on their content]."}
-]}
-Create exactly 6 tasks. Make howTo specific to their actual site content. Cover: titles, meta, headings, images, speed, links.`
-      }], "Return only raw JSON. No markdown. No backticks. No extra text.", 1200);
+Issues: ${issuesSummary}
+Site: ${siteContext}
+Return ONLY raw JSON, no markdown:
+{"improvements":[{"icon":"🏠","task":"Task name","priority":"high","rationale":"Why it matters","howTo":"Specific step by step instructions referencing their actual content."}]}
+6 tasks covering: title tags, meta, headings, images, speed, links. Make howTo specific to their site.`
+      }], "Return only raw JSON. No markdown. No backticks.", 1200);
       const impParsed = extractJSON(rawImp);
 
-      // Call 2: first 4 blog posts
       setLoadMsg("Creating blog content ideas (1/2)…");
       const rawBlog1 = await callAI([{
-        role: "user", content: `Create 4 SEO blog post ideas for this specific website.
+        role: "user", content: `Create 4 SEO blog post ideas for this website.
 URL: ${url}
 Language: ${report.lang}
-Site info: ${siteContext}
-
-Return ONLY raw JSON, no markdown, no backticks:
-{"posts":[
-  {
-    "title":"Specific blog post title with target keyword",
-    "keyword":"exact keyword phrase to target",
-    "type":"how-to",
-    "wordCount":900,
-    "rationale":"Why this will bring traffic to this specific site",
-    "prompt":"Write a 900-word SEO-optimised blog post in ${report.lang} for the website ${url}. The post is titled [TITLE]. Primary keyword: [KEYWORD]. The website sells/offers [describe from site info]. Target audience: [infer from site]. Structure the post with: 1) A compelling intro mentioning the keyword, 2) Five H2 subheadings covering the topic in depth with practical advice, 3) Real examples relevant to [site topic], 4) A conclusion with a call-to-action to visit ${url}. Use the keyword naturally 3-4 times. Do not keyword-stuff. Write in a [professional/friendly - infer from site] tone. Word count: approximately 900 words."
-  }
-]}
-All 4 posts must be topically relevant to this specific site. Titles must include real searchable keywords.`
+Site: ${siteContext}
+Return ONLY raw JSON, no markdown:
+{"posts":[{"title":"Post title","keyword":"target keyword","type":"how-to","wordCount":900,"rationale":"Why this brings traffic","prompt":"Write a 900-word SEO blog post in ${report.lang} titled [TITLE]. Keyword: [KEYWORD]. For website ${url} about [site topic from context]. Audience: [infer]. Include: compelling intro with keyword, 5 H2 subheadings with practical depth, real examples, conclusion with CTA to visit ${url}. Use keyword 3-4 times naturally. Tone: professional. 900 words."}]}
+4 posts specific to this niche. Write prompts in ${report.lang}.`
       }], "Return only raw JSON. No markdown. No backticks.", 1400);
       const blog1Parsed = extractJSON(rawBlog1);
 
-      // Call 3: next 4 blog posts
       setLoadMsg("Creating blog content ideas (2/2)…");
       const rawBlog2 = await callAI([{
-        role: "user", content: `Create 4 MORE different SEO blog post ideas for this website. Different topics from any previous ones.
+        role: "user", content: `Create 4 MORE different SEO blog post ideas. Different topics from before.
 URL: ${url}
 Language: ${report.lang}
-Site info: ${siteContext}
-
-Return ONLY raw JSON, no markdown, no backticks:
-{"posts":[
-  {
-    "title":"Different specific blog post title",
-    "keyword":"different exact keyword phrase",
-    "type":"listicle",
-    "wordCount":800,
-    "rationale":"Why this will bring traffic to this specific site",
-    "prompt":"Write an 800-word SEO-optimised blog post in ${report.lang} for the website ${url}. The post is titled [TITLE]. Primary keyword: [KEYWORD]. The website sells/offers [describe from site info]. Target audience: [infer from site]. Structure the post with: 1) A compelling intro mentioning the keyword, 2) Five H2 subheadings covering the topic in depth with practical advice, 3) Real examples relevant to [site topic], 4) A conclusion with a call-to-action to visit ${url}. Use the keyword naturally 3-4 times. Do not keyword-stuff. Write in a [professional/friendly - infer from site] tone. Word count: approximately 800 words."
-  }
-]}
-Create 4 posts on completely different angles from the first batch.`
+Site: ${siteContext}
+Return ONLY raw JSON, no markdown:
+{"posts":[{"title":"Different post title","keyword":"different keyword","type":"listicle","wordCount":800,"rationale":"Why this brings traffic","prompt":"Write an 800-word SEO blog post in ${report.lang} titled [TITLE]. Keyword: [KEYWORD]. For website ${url} about [site topic from context]. Audience: [infer]. Include: compelling intro with keyword, 5 H2 subheadings with practical depth, real examples, conclusion with CTA to visit ${url}. Use keyword 3-4 times naturally. Tone: professional. 800 words."}]}
+4 different posts. Write prompts in ${report.lang}.`
       }], "Return only raw JSON. No markdown. No backticks.", 1400);
       const blog2Parsed = extractJSON(rawBlog2);
 
-      setPlan({
-        improvements: impParsed.improvements || [],
-        posts: [...(blog1Parsed.posts || []), ...(blog2Parsed.posts || [])],
-      });
+      setPlan({ improvements: impParsed.improvements || [], posts: [...(blog1Parsed.posts || []), ...(blog2Parsed.posts || [])] });
       setPlanTab("improvements");
       setStep("plan");
     } catch (e) {
       console.error("PLAN ERROR:", e.message);
-      setError("ai");
-      setStep(prevReport ? "delta" : "report");
+      setError("ai"); setStep(prevReport ? "delta" : "report");
     }
   }
 
-  function reset() {
-    setUrl(""); setStep("input"); setReport(null); setPrevReport(null);
-    setPlan(null); setSiteData(null); setManual(false); setManualDesc(""); setError(null);
-  }
-
-  const stepKeys = ["input", "report", "delta", "plan"];
-  const stepLabels = ["Scan", "Report", "Re-check", "Action Plan"];
+  const stepKeys = ["input", "report", "delta", "keywords", "plan"];
+  const stepLabels = ["Scan", "Report", "Re-check", "Keywords", "Action Plan"];
 
   return (
     <div style={{ minHeight: "100vh", background: "#0A0F14" }}>
+      {/* Nav */}
       <nav style={{ borderBottom: "1px solid #141E28", padding: "18px 32px", display: "flex", alignItems: "center", gap: 12, position: "sticky", top: 0, zIndex: 20, background: "rgba(10,15,20,.97)", backdropFilter: "blur(12px)" }}>
-        <img src="/logo.png" style={{ height: 36, width: "auto" }} alt="logo" />
+        <button className="logo-btn" onClick={reset}>
+          <div style={{ width: 32, height: 32, background: "#1E8A5E", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>⚡</div>
+          <span style={{ fontWeight: 800, fontSize: 18, letterSpacing: "-0.5px", color: "#E8EDF2", transition: "color .2s" }}>RankFlow</span>
+        </button>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
           {stepKeys.map((s, i) => {
             const reached = stepKeys.indexOf(step) >= i;
             return (
               <div key={s} style={{ display: "flex", alignItems: "center", gap: 5 }}>
                 <div style={{ width: 7, height: 7, borderRadius: "50%", background: reached ? "#1E8A5E" : "#1E2A38", transition: "background .3s" }} />
-                <span style={{ fontFamily: "'DM Mono'", fontSize: 11, color: reached ? "#1E8A5E" : "#2A3A4A", textTransform: "uppercase", letterSpacing: 1 }}>{stepLabels[i]}</span>
-                {i < stepKeys.length - 1 && <div style={{ width: 18, height: 1, background: "#1A2332", margin: "0 2px" }} />}
+                <span style={{ fontFamily: "'DM Mono'", fontSize: 11, color: reached ? "#1E8A5E" : "#2A3A4A", textTransform: "uppercase", letterSpacing: 1, display: window.innerWidth < 600 ? "none" : "inline" }}>{stepLabels[i]}</span>
+                {i < stepKeys.length - 1 && <div style={{ width: 14, height: 1, background: "#1A2332", margin: "0 2px" }} />}
               </div>
             );
           })}
@@ -446,6 +477,7 @@ Create 4 posts on completely different angles from the first batch.`
 
       <div style={{ maxWidth: 780, margin: "0 auto", padding: "52px 24px 120px" }}>
 
+        {/* INPUT */}
         {step === "input" && (
           <div className="fade-up">
             <div style={{ marginBottom: 52 }}>
@@ -454,7 +486,7 @@ Create 4 posts on completely different angles from the first batch.`
                 Your website,<br /><span style={{ color: "#1E8A5E" }}>ranked higher.</span>
               </h1>
               <p style={{ color: "#4A5A6A", fontSize: 17, lineHeight: 1.8, maxWidth: 500 }}>
-                Get a full SEO audit, prioritised fixes, and a personalised content plan — in seconds, for free.
+                Get a full SEO audit, keyword strategy, and a personalised content plan — in seconds, for free.
               </p>
             </div>
             <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
@@ -477,7 +509,7 @@ Create 4 posts on completely different angles from the first batch.`
             )}
             {error === "ai" && (
               <div style={{ color: "#E05A5A", fontSize: 14, marginTop: 14, fontFamily: "'DM Mono'", background: "#140A0A", border: "1px solid #3A1818", borderRadius: 10, padding: "12px 16px" }}>
-                AI call failed — check your VITE_ANTHROPIC_KEY in .env and restart: Ctrl+C then npm run dev
+                AI call failed — check your VITE_ANTHROPIC_KEY in Vercel Environment Variables and redeploy.
               </div>
             )}
             {manual && (
@@ -494,8 +526,10 @@ Create 4 posts on completely different angles from the first batch.`
           </div>
         )}
 
+        {/* LOADING */}
         {step === "loading" && <Loader msg={loadMsg} />}
 
+        {/* REPORT */}
         {step === "report" && report && (
           <div className="fade-up">
             <SectionLabel>SEO Audit — {report.lang}</SectionLabel>
@@ -517,11 +551,12 @@ Create 4 posts on completely different angles from the first batch.`
             </div>
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
               <Btn primary onClick={recheck}>↻ Re-check after fixing</Btn>
-              <Btn onClick={generatePlan}>Skip → Build action plan</Btn>
+              <Btn onClick={generateKeywords}>→ Keyword Analysis</Btn>
             </div>
           </div>
         )}
 
+        {/* DELTA */}
         {step === "delta" && report && prevReport && (
           <div className="fade-up">
             <SectionLabel>Updated Report</SectionLabel>
@@ -546,17 +581,60 @@ Create 4 posts on completely different angles from the first batch.`
             </div>
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
               <Btn onClick={recheck}>↻ Check again</Btn>
-              <Btn primary onClick={generatePlan}>→ Build action plan</Btn>
+              <Btn primary onClick={generateKeywords}>→ Keyword Analysis</Btn>
             </div>
           </div>
         )}
 
+        {/* KEYWORDS */}
+        {step === "keywords" && keywords && (
+          <div className="fade-up">
+            <SectionLabel>Keyword Strategy — {report?.lang}</SectionLabel>
+            <h2 style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.8px", marginBottom: 8, color: "#E8EDF2" }}>Keyword Analysis</h2>
+            <p style={{ color: "#4A5A6A", fontSize: 15, marginBottom: 28, lineHeight: 1.75 }}>
+              Target these keywords across your pages and blog posts to improve your search rankings.
+            </p>
+
+            {/* Suggested meta tags */}
+            <div style={{ background: "#111820", border: "1px solid #1E2A38", borderRadius: 12, padding: "18px 20px", marginBottom: 28 }}>
+              <SectionLabel>AI-Suggested Meta Tags</SectionLabel>
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontFamily: "'DM Mono'", fontSize: 11, color: "#3B82F6", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>Title Tag</div>
+                <div style={{ fontSize: 15, color: "#E8EDF2", background: "#0A1018", padding: "10px 14px", borderRadius: 8, border: "1px solid #1E2A38" }}>{keywords.metaTitle}</div>
+              </div>
+              <div>
+                <div style={{ fontFamily: "'DM Mono'", fontSize: 11, color: "#A855F7", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>Meta Description</div>
+                <div style={{ fontSize: 14, color: "#8A9AAA", background: "#0A1018", padding: "10px 14px", borderRadius: 8, border: "1px solid #1E2A38", lineHeight: 1.7 }}>{keywords.metaDesc}</div>
+              </div>
+            </div>
+
+            {/* Legend */}
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
+              {[["#3B82F6", "Informational"], ["#1E8A5E", "Transactional"], ["#D4A017", "Navigational"], ["#A855F7", "Commercial"]].map(([c, l]) => (
+                <div key={l} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#5A6A7A" }}>
+                  <div style={{ width: 8, height: 8, borderRadius: 2, background: c }} />{l}
+                </div>
+              ))}
+            </div>
+
+            <div style={{ marginBottom: 32 }}>
+              {keywords.keywords?.map((kw, i) => <KeywordCard key={i} kw={kw} />)}
+            </div>
+
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              <Btn primary onClick={generatePlan}>→ Build action plan</Btn>
+              <Btn onClick={() => setStep(prevReport ? "delta" : "report")}>← Back to report</Btn>
+            </div>
+          </div>
+        )}
+
+        {/* PLAN */}
         {step === "plan" && plan && (
           <div className="fade-up">
             <SectionLabel>Your SEO Action Plan</SectionLabel>
             <h2 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.8px", marginBottom: 8, color: "#E8EDF2" }}>What to do next</h2>
             <p style={{ color: "#4A5A6A", fontSize: 15, marginBottom: 32, lineHeight: 1.75 }}>
-              Fix the improvements first — they're one-time tasks. Then use the blog calendar to grow organic traffic consistently.
+              Fix improvements first — they're one-time tasks. Then use the blog calendar to grow organic traffic.
             </p>
             <div style={{ display: "flex", background: "#0A0F14", border: "1px solid #1E2A38", borderRadius: 11, padding: 4, width: "fit-content", marginBottom: 28 }}>
               {[
@@ -588,15 +666,16 @@ Create 4 posts on completely different angles from the first batch.`
               <div className="fade-up">
                 <div style={{ background: "#0D1520", border: "1px solid #1A2A20", borderRadius: 10, padding: "16px 20px", marginBottom: 22 }}>
                   <div style={{ fontSize: 14, color: "#5A7A6A", lineHeight: 1.8 }}>
-                    <strong style={{ color: "#8AAAA0" }}>📋 How to use:</strong> Hit "Copy Prompt" on any post and paste it into ChatGPT or Claude. You'll get a full, SEO-optimised blog post ready to publish. Aim for 1–2 posts per week.
+                    <strong style={{ color: "#8AAAA0" }}>📋 How to use:</strong> Hit "Copy Prompt" and paste into ChatGPT or Claude. You'll get a full SEO blog post ready to publish. Aim for 1–2 posts per week.
                   </div>
                 </div>
                 {plan.posts?.map((post, i) => <BlogCard key={i} post={post} index={i} />)}
               </div>
             )}
 
-            <div style={{ marginTop: 36, paddingTop: 24, borderTop: "1px solid #141E28" }}>
-              <Btn onClick={reset}>← Analyse another site</Btn>
+            <div style={{ marginTop: 36, paddingTop: 24, borderTop: "1px solid #141E28", display: "flex", gap: 12 }}>
+              <Btn onClick={() => setStep("keywords")}>← Back to keywords</Btn>
+              <Btn onClick={reset}>↺ Analyse another site</Btn>
             </div>
           </div>
         )}
